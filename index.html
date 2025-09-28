@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistemas de Ecuaciones Lineales</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background:#1a202c; color:#e2e8f0; margin:0; padding:20px; }
+    h1, h2, h3 { color:#f8fafc; }
+    .card { background:#2d3748; padding:20px; border-radius:10px; margin-bottom:20px; }
+    input { width:100%; padding:10px; margin-bottom:10px; border-radius:5px; border:1px solid #444; background:#4a5568; color:white; }
+    button { padding:8px 12px; border:none; border-radius:5px; margin:5px; cursor:pointer; }
+    button.primary { background:#60a5fa; color:white; }
+    button.secondary { background:#4a5568; color:white; }
+    button.pdf { background:#22c55e; color:white; }
+    .result-type-tag { padding:5px 10px; border-radius:5px; font-weight:bold; }
+    .tag-determinado { background:#34d399; }
+    .tag-indeterminado { background:#fcd34d; color:black; }
+    .tag-incompatible { background:#ef4444; }
+    canvas { width:100%; height:500px; background:#fff; border-radius:10px; display:block; }
+    .steps { margin-top:10px; padding:10px; background:#1e293b; border-radius:8px; }
+    .method { margin-bottom:15px; }
+    .method h4 { margin:5px 0; color:#93c5fd; }
+    .classification { font-weight:bold; margin-top:10px; }
+  </style>
+</head>
+<body>
+  <h1>Sistemas de Ecuaciones Lineales</h1>
+
+  <div class="card">
+    <h2>Entrada de Ecuaciones</h2>
+    <input type="text" id="eq1" placeholder="Ej: 2x + 3y = 6">
+    <input type="text" id="eq2" placeholder="Ej: x - y = 1">
+    <button class="primary" onclick="solveSystem()">Resolver</button>
+    <button class="secondary" onclick="clearInputs()">Limpiar</button>
+    <button class="pdf" onclick="savePDF()">Guardar en PDF</button>
+    <p id="error-message" style="color:#ef4444;"></p>
+
+    <div id="results-card" style="display:none;">
+      <h3>Resultados</h3>
+      <div id="result-type-display"></div>
+      <p id="geometric-interpretation"></p>
+      <div id="solution-display"></div>
+      <div class="classification" id="classification-display"></div>
+
+      <div class="steps">
+        <h3>Procedimiento paso a paso</h3>
+        <div class="method">
+          <h4>Método de Sustitución</h4>
+          <div id="substitution-steps"></div>
+        </div>
+        <div class="method">
+          <h4>Método de Igualación</h4>
+          <div id="equalization-steps"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Gráfica Interactiva</h2>
+    <div>
+      <button onclick="zoomIn()">+</button>
+      <button onclick="zoomOut()">-</button>
+    </div>
+    <canvas id="equationCanvas"></canvas>
+  </div>
+
+<script>
+const { jsPDF } = window.jspdf;
+const eq1Input = document.getElementById('eq1');
+const eq2Input = document.getElementById('eq2');
+const errorMessage = document.getElementById('error-message');
+const resultsCard = document.getElementById('results-card');
+const resultTypeDisplay = document.getElementById('result-type-display');
+const geometricInterpretation = document.getElementById('geometric-interpretation');
+const solutionDisplay = document.getElementById('solution-display');
+const classificationDisplay = document.getElementById('classification-display');
+const substitutionSteps = document.getElementById('substitution-steps');
+const equalizationSteps = document.getElementById('equalization-steps');
+const equationCanvas = document.getElementById('equationCanvas');
+const ctx = equationCanvas.getContext('2d');
+
+let scale = 40;
+let offsetX = 0;
+let offsetY = 0;
+let dragging = false;
+let lastX, lastY;
+let eq1Last, eq2Last, solXLast, solYLast;
+
+function normalize(value){ return Math.abs(value)<1e-10?0:value; }
+function formatNumber(num){ return normalize(num).toFixed(3).replace(/\.0+$/,''); }
+
+function parseEquation(eq){
+  let normalized = eq.toLowerCase().replace(/\s/g,'');
+  normalized = normalized.replace(/(^|[+-])(x|y)/g, m=>m[0]==='-'?'-1'+m[1]:'+1'+m[1]);
+  let [left,right] = normalized.split('=');
+  if(!right) throw new Error("Formato inválido");
+  let a=0,b=0,c=parseFloat(right);
+  let xm=left.match(/([+-]?\d*\.?\d*)x/);
+  let ym=left.match(/([+-]?\d*\.?\d*)y/);
+  if(xm) a=parseFloat(xm[1]);
+  if(ym) b=parseFloat(ym[1]);
+  return {a:normalize(a),b:normalize(b),c:normalize(c)};
+}
+
+function solveSystem(){
+  errorMessage.textContent='';
+  resultsCard.style.display='none';
+  let eq1Str=eq1Input.value.trim(), eq2Str=eq2Input.value.trim();
+  if(!eq1Str||!eq2Str){ errorMessage.textContent='Introduce ambas ecuaciones'; return; }
+  let eq1,eq2;
+  try{ eq1=parseEquation(eq1Str); eq2=parseEquation(eq2Str); }
+  catch(e){ errorMessage.textContent='Error: '+e.message; return; }
+
+  let {a:a1,b:b1,c:c1}=eq1;
+  let {a:a2,b:b2,c:c2}=eq2;
+  let det=normalize(a1*b2-a2*b1);
+  let detX=normalize(c1*b2-c2*b1);
+  let detY=normalize(a1*c2-a2*c1);
+  let type,geo,x=null,y=null;
+  if(det!==0){ type='Determinado'; geo='Rectas Secantes'; x=detX/det; y=detY/det; }
+  else{
+    if(normalize(a1*c2-a2*c1)===0 && normalize(b1*c2-b2*c1)===0){ type='Indeterminado'; geo='Rectas Coincidentes'; }
+    else{ type='Incompatible'; geo='Rectas Paralelas'; }
+  }
+  displayResults(type,geo,x,y,eq1,eq2);
+  eq1Last=eq1; eq2Last=eq2; solXLast=x; solYLast=y;
+  drawGraph(eq1,eq2,x,y);
+}
+
+function displayResults(type,geo,x,y,eq1,eq2){
+  resultsCard.style.display='block';
+  resultTypeDisplay.innerHTML=`<span class="result-type-tag tag-${type.toLowerCase()}">${type}</span>`;
+  geometricInterpretation.textContent=geo;
+  classificationDisplay.textContent=`Clasificación: ${type}`;
+  if(x!==null&&y!==null){
+    solutionDisplay.textContent=`x = ${formatNumber(x)}, y = ${formatNumber(y)}`;
+    showSteps(eq1,eq2,x,y);
+  }
+  else if(type==='Indeterminado'){
+    solutionDisplay.textContent='Infinitas soluciones';
+    substitutionSteps.textContent='Ambas ecuaciones representan la misma recta.';
+    equalizationSteps.textContent='Ambas ecuaciones representan la misma recta.';
+  }
+  else{
+    solutionDisplay.textContent='No hay solución';
+    substitutionSteps.textContent='Las rectas son paralelas, no se intersectan.';
+    equalizationSteps.textContent='Las rectas son paralelas, no se intersectan.';
+  }
+}
+
+function showSteps(eq1,eq2,x,y){
+  substitutionSteps.innerHTML=`
+    De la primera ecuación: ${eq1.a}x + ${eq1.b}y = ${eq1.c}<br>
+    Despejamos una variable, por ejemplo x:<br>
+    x = (${eq1.c} - ${eq1.b}y)/${eq1.a}<br>
+    Sustituimos en la segunda ecuación: ${eq2.a}x + ${eq2.b}y = ${eq2.c}<br>
+    Resolviendo obtenemos y = ${formatNumber(y)}.<br>
+    Sustituyendo, x = ${formatNumber(x)}.
+  `;
+
+  equalizationSteps.innerHTML=`
+    De la primera: ${eq1.a}x + ${eq1.b}y = ${eq1.c} → y = (${eq1.c} - ${eq1.a}x)/${eq1.b}<br>
+    De la segunda: ${eq2.a}x + ${eq2.b}y = ${eq2.c} → y = (${eq2.c} - ${eq2.a}x)/${eq2.b}<br>
+    Igualamos ambas expresiones de y:<br>
+    (${eq1.c} - ${eq1.a}x)/${eq1.b} = (${eq2.c} - ${eq2.a}x)/${eq2.b}<br>
+    Resolviendo obtenemos x = ${formatNumber(x)}.<br>
+    Sustituyendo, y = ${formatNumber(y)}.
+  `;
+}
+
+function clearInputs(){ eq1Input.value=''; eq2Input.value=''; resultsCard.style.display='none'; drawGraphDefault(); }
+
+// ---- Conversión coordenadas ----
+function toCanvasX(x){ return equationCanvas.width/2 + x*scale + offsetX; }
+function toCanvasY(y){ return equationCanvas.height/2 - y*scale + offsetY; }
+function toMathX(xPix){ return (xPix - equationCanvas.width/2 - offsetX)/scale; }
+function toMathY(yPix){ return (equationCanvas.height/2 - yPix + offsetY)/scale; }
+
+// ---- Gráfica ----
+function resizeCanvas(){
+  equationCanvas.width=equationCanvas.clientWidth;
+  equationCanvas.height=equationCanvas.clientHeight;
+}
+function drawGrid(){
+  ctx.clearRect(0,0,equationCanvas.width,equationCanvas.height);
+  ctx.strokeStyle="#ddd";
+  ctx.lineWidth=1;
+  ctx.font="10px Arial";
+  ctx.fillStyle="#000";
+
+  let minX = toMathX(0), maxX = toMathX(equationCanvas.width);
+  let minY = toMathY(equationCanvas.height), maxY = toMathY(0);
+
+  for(let x=Math.floor(minX); x<=Math.ceil(maxX); x++){
+    ctx.beginPath();
+    ctx.moveTo(toCanvasX(x),0);
+    ctx.lineTo(toCanvasX(x),equationCanvas.height);
+    ctx.stroke();
+    if(x!==0) ctx.fillText(x, toCanvasX(x)+2, toCanvasY(0)-2);
+  }
+  for(let y=Math.floor(minY); y<=Math.ceil(maxY); y++){
+    ctx.beginPath();
+    ctx.moveTo(0,toCanvasY(y));
+    ctx.lineTo(equationCanvas.width,toCanvasY(y));
+    ctx.stroke();
+    if(y!==0) ctx.fillText(y, toCanvasX(0)+2, toCanvasY(y)-2);
+  }
+
+  // Ejes
+  ctx.strokeStyle="#000";
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.moveTo(0,toCanvasY(0));
+  ctx.lineTo(equationCanvas.width,toCanvasY(0));
+  ctx.moveTo(toCanvasX(0),0);
+  ctx.lineTo(toCanvasX(0),equationCanvas.height);
+  ctx.stroke();
+}
+function drawGraphDefault(){ resizeCanvas(); drawGrid(); }
+function drawGraph(eq1,eq2,solX,solY){
+  drawGraphDefault();
+  if(eq1) drawLine(eq1,"#60a5fa");
+  if(eq2) drawLine(eq2,"#06b6d4");
+  if(solX!==null&&solY!==null) drawPoint(solX,solY);
+}
+function drawLine(eq,color){
+  let {a,b,c}=eq;
+  ctx.strokeStyle=color;
+  ctx.lineWidth=2;
+  if(b===0){
+    let x=c/a;
+    ctx.beginPath();
+    ctx.moveTo(toCanvasX(x),0);
+    ctx.lineTo(toCanvasX(x),equationCanvas.height);
+    ctx.stroke();
+    return;
+  }
+  let x1=toMathX(0), x2=toMathX(equationCanvas.width);
+  let y1=(c-a*x1)/b, y2=(c-a*x2)/b;
+  ctx.beginPath();
+  ctx.moveTo(toCanvasX(x1),toCanvasY(y1));
+  ctx.lineTo(toCanvasX(x2),toCanvasY(y2));
+  ctx.stroke();
+}
+function drawPoint(x,y){
+  ctx.fillStyle="red";
+  ctx.beginPath();
+  ctx.arc(toCanvasX(x),toCanvasY(y),5,0,2*Math.PI);
+  ctx.fill();
+  ctx.fillStyle="black";
+  ctx.font="14px Arial";
+  ctx.fillText(`(${formatNumber(x)}, ${formatNumber(y)})`, toCanvasX(x)+8, toCanvasY(y)-8);
+}
+
+// ---- Zoom ----
+function zoomIn(){ scale*=1.2; drawGraph(eq1Last,eq2Last,solXLast,solYLast); }
+function zoomOut(){ scale/=1.2; drawGraph(eq1Last,eq2Last,solXLast,solYLast); }
+
+// ---- Arrastrar ----
+equationCanvas.addEventListener("mousedown", e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; });
+equationCanvas.addEventListener("mousemove", e=>{
+  if(dragging){ offsetX+=e.clientX-lastX; offsetY+=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY; drawGraph(eq1Last,eq2Last,solXLast,solYLast); }
+});
+equationCanvas.addEventListener("mouseup", ()=>dragging=false);
+equationCanvas.addEventListener("mouseleave", ()=>dragging=false);
+
+window.addEventListener('resize',drawGraphDefault);
+drawGraphDefault();
+
+// ---- Guardar en PDF ----
+function savePDF(){
+  const pdf = new jsPDF();
+  pdf.setFontSize(16);
+  pdf.text("Sistemas de Ecuaciones Lineales", 10, 15);
+  pdf.setFontSize(12);
+
+  let eq1 = eq1Input.value.trim();
+  let eq2 = eq2Input.value.trim();
+  pdf.text("Ecuación 1: " + eq1, 10, 30);
+  pdf.text("Ecuación 2: " + eq2, 10, 40);
+
+  let resultText = solutionDisplay.textContent || "";
+  let classification = classificationDisplay.textContent || "";
+  let interpretation = geometricInterpretation.textContent || "";
+
+  pdf.text("Resultado: " + resultText, 10, 55);
+  pdf.text("Clasificación: " + classification, 10, 65);
+  pdf.text("Interpretación: " + interpretation, 10, 75);
+
+  pdf.text("Método de Sustitución:", 10, 90);
+  pdf.setFontSize(10);
+  pdf.text(substitutionSteps.innerText, 10, 100);
+
+  pdf.setFontSize(12);
+  pdf.text("Método de Igualación:", 10, 140);
+  pdf.setFontSize(10);
+  pdf.text(equalizationSteps.innerText, 10, 150);
+
+  // Agregar la gráfica
+  let canvasData = equationCanvas.toDataURL("image/png");
+  pdf.addImage(canvasData, "PNG", 10, 180, 180, 100);
+
+  pdf.save("sistema_ecuaciones.pdf");
+}
+</script>
+</body>
+</html>
